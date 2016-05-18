@@ -1,0 +1,199 @@
+version: '2'
+services:
+  nginx:
+    image: nginx:1.9
+    container_name: nginx
+    restart: on-failure:5
+    network_mode: bridge
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - /etc/nginx/conf.d
+      - /etc/nginx/vhost.d
+      - /usr/share/nginx/html
+      - /etc/letsencrypt/live:/etc/nginx/certs:ro
+  
+  docker-gen:
+    image: jwilder/docker-gen
+    container_name: docker-gen
+    restart: on-failure:5
+    network_mode: bridge
+    volumes_from:
+      - nginx
+    volumes:
+      - /etc/docker-gen/templates/nginx.tmpl:/etc/docker-gen/templates/nginx.tmpl:ro
+      - /var/run/docker.sock:/tmp/docker.sock:ro
+    entrypoint: /usr/local/bin/docker-gen -notify-sighup nginx -watch -only-exposed -wait 5s:30s /etc/docker-gen/templates/nginx.tmpl /etc/nginx/conf.d/default.conf
+  
+  letsencrypt:
+    image: jrcs/letsencrypt-nginx-proxy-companion
+    container_name: letsencrypt
+    restart: on-failure:5
+    network_mode: bridge
+    volumes_from:
+      - nginx
+    volumes:
+      - /etc/letsencrypt/live:/etc/nginx/certs:rw
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      - NGINX_DOCKER_GEN_CONTAINER=docker-gen
+
+  www-chambana-net:
+    image: chambana/userdir
+    container_name: www-chambana-net
+    hostname: www.chambana.net
+    restart: on-failure:5
+    network_mode: bridge
+    ports:
+      - "2222:22"
+    volumes:
+      - /etc/chambana/users.yml:/etc/ssh/auth/users.yml:ro
+      - /home:/home
+    environment:
+      - GITHUB_USER=chambana-net
+      - GITHUB_REPO=chambana.net-site
+      - VIRTUAL_HOST=chambana.net,www.chambana.net
+      - VIRTUAL_PORT=80
+      - LETSENCRYPT_HOST=chambana.net,www.chambana.net
+      - LETSENCRYPT_EMAIL=hostmaster@chambana.net
+  
+  freeipa:
+    image: adelton/freeipa-server
+    container_name: freeipa
+    hostname: ipa.chambana.net
+    restart: on-failure:5
+    network_mode: bridge
+    ports:
+      - "53:53"
+      - "53:53/udp"
+    volumes:
+      - /sys/fs/cgroup:/sys/fs/cgroup:ro
+      - freeipa:/data
+    environment:
+      - IPA_SERVER_INSTALL_OPTS=--no-forwarders
+      - VIRTUAL_HOST=ipa.chambana.net
+      - VIRTUAL_PROTO=https
+      - VIRTUAL_PORT=443
+      - LETSENCRYPT_HOST=ipa.chambana.net
+      - LETSENCRYPT_EMAIL=hostmaster@chambana.net
+  
+  prosody:
+    image: chambana/prosody
+    container_name: prosody
+    hostname: chat.chambana.net
+    restart: on-failure:5
+    network_mode: bridge
+    expose:
+      - 80
+    ports:
+      - "5000:5000"
+      - "5222:5222"
+      - "5269:5269"
+      - "5280:5280"
+      - "5281:5281"
+      - "3478:3478/udp"
+    volumes:
+      - /etc/letsencrypt/live/chambana.net:/etc/letsencrypt:ro
+    environment:
+      - XMPP_DOMAIN=chambana.net
+      - DB_HOST=postgres
+      - DB_PORT=5432
+      - DB_NAME=prosody
+      - DB_USER=prosody
+      - LDAP_HOST=ldap
+      - LDAP_USER_BASE=cn=users,cn=accounts,dc=chambana,dc=net
+      - LDAP_GROUP_BASE=cn=groups,cn=accounts,dc=chambana,dc=net
+      - LDAP_DN=uid=prosody,cn=sysaccounts,cn=etc,dc=chambana,dc=net
+      - LDAP_GROUP=xmpp
+    links:
+      - prosody-postgres:postgres
+      - freeipa:ldap
+  
+  prosody-postgres:
+    image: postgres
+    container_name: prosody-postgres
+    restart: on-failure:5
+    network_mode: bridge
+    volumes:
+      - prosody_postgres:/var/lib/postgresql/data
+    environment:
+      - POSTGRES_USER=prosody
+  
+  postfix:
+    image: chambana/postfix
+    container_name: postfix
+    hostname: smtp.chambana.net
+    restart: on-failure:5
+    network_mode: bridge
+    ports:
+      - "25:25"
+      - "587:587"
+    volumes:
+      - /etc/letsencrypt/live/smtp.chambana.net:/etc/letsencrypt:ro
+      - /etc/chambana/virtual-alias.cf:/etc/postfix/virtual-alias.cf
+      - lists:/var/lib/mailman
+    environment:
+      - VIRTUAL_HOST=smtp.chambana.net,lists.chambana.net,ivan.mayfirst.org
+      - LETSENCRYPT_HOST=smtp.chambana.net,lists.chambana.net,ivan.mayfirst.org
+      - LETSENCRYPT_EMAIL=hostmaster@chambana.net
+      - POSTFIX_MAILNAME=ivan.mayfirst.org
+      - POSTFIX_MYHOSTNAME=ivan.mayfirst.org
+      - POSTFIX_MYDESTINATION=localhost
+      - POSTFIX_MYNETWORKS=127.0.0.0/8 [::ffff:127.0.0.0]/104 [::1]/128 172.16.0.0/12
+      - POSTFIX_VIRTUAL_ALIAS_DOMAINS=ucimc.org, acornactivemedia.com, starbase217.com, wrfu.net, nonconformity.net, saschameinrath.com, anti-war.net, oswc.net, wirelesssummit.org
+      - POSTFIX_VIRTUAL_MAILBOX_DOMAINS=chambana.net
+      - POSTFIX_RELAY_DOMAINS=lists.chambana.net
+      - MAILMAN_DOMAIN=lists.chambana.net
+      - MAILMAN_LISTMASTER=postmaster@chambana.net
+      - POSTFIX_LDAP_SERVER_HOST=ldap
+      - POSTFIX_LDAP_SEARCH_BASE=cn=users,cn=accounts,dc=chambana,dc=net
+      - POSTFIX_LDAP_BIND_DN=uid=admin,cn=users,cn=accounts,dc=chambana,dc=net
+    links:
+      - freeipa:ldap
+      - dovecot:dovecot
+      - amavis:amavis
+  
+  dovecot:
+    image: chambana/dovecot
+    container_name: dovecot
+    hostname: imap.chambana.net
+    restart: on-failure:5
+    network_mode: bridge
+    ports:
+      - "143:143"
+      - "993:993"
+    volumes_from:
+      - amavis
+    volumes:
+      - /etc/letsencrypt/live/imap.chambana.net:/etc/letsencrypt:ro
+      - /etc/dovecot/ssl-parameters.dat:/var/lib/dovecot/ssl-parameters.dat
+      - mailboxes:/var/mail
+    environment:
+      - VIRTUAL_HOST=imap.chambana.net
+      - LETSENCRYPT_HOST=imap.chambana.net
+      - LETSENCRYPT_EMAIL=hostmaster@chambana.net
+      - DOVECOT_LDAP_URIS=ldap://ldap
+      - DOVECOT_LDAP_BASE=dc=chambana,dc=net
+      - DOVECOT_LDAP_AUTH_BIND_USERDN=uid=%n,cn=users,cn=accounts,dc=chambana,dc=net
+    links:
+      - freeipa:ldap
+  
+  amavis:
+    image: chambana/amavis
+    container_name: amavis
+    hostname: spam.chambana.net
+    restart: on-failure:5
+    network_mode: bridge
+    volumes:
+      - spam_bayes:/var/lib/amavis/.spamassassin
+    environment:
+      - AMAVIS_MAILNAME=chambana.net
+
+volumes:
+  freeipa: {}
+  mailboxes: {}
+  lists: {}
+  spam_bayes: {}
+  prosody_postgres: {}
+  freeipa_oti: {}

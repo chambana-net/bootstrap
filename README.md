@@ -1,4 +1,4 @@
-Techops
+Bootstrap
 =======
 
 The various bits and pieces for instantiating [Chambana.net](https://chambana.net). This repository contains all the files necessary to instantiate a single Chambana.net server. **_THIS AND OTHER ASSOCIATED REPOSITORIES ARE AN EFFORT TO DOCUMENT AND STANDARDIZE A LONG-RUNNING HOSTING PROJECT, AND IS PROVIDED AS-IS. IT MAY LOCK YOU OUT OF YOUR BOX AND/OR LIGHT IT ON FIRE._**
